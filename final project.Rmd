@@ -1,0 +1,136 @@
+---
+title: "ML Final Project"
+author: "Yolanda Xu"
+date: "January 25, 2015"
+output: html_document
+---
+
+It is not uncommon for people to use devices like Jawbone Up, Nike FuelBand and Fitbit to record daily data about personal activity these days. The presented data mainly focus on quantifying how much of a particular activity, but seldom has it quantified how well they do it. From this point, this project aims to use data, which is from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, to quantifying the wellness class and predict the class based on unknown testing data. 
+
+The training data for this project are from: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+And teh test data are from: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv 
+
+At a first glance of the csv file, there are many NA, white space and #DIV/0! in the data. Thus the first step before preprocessing the data is to identify all these types as NAs and remove columns with much too NAs in the following parts. 
+
+```{r}
+#loading  
+library(caret)
+library(ggplot2)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+set.seed(12345)
+
+# getting data
+training0<-"http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing0<-"http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training<-read.csv(url(training0), na.strings=c("NA", " ", "#DIV/0!"))
+testing<-read.csv(url(testing0), na.strings=c("NA", " ", "#DIV/0!"))
+
+```
+For this medium training datasets, I set p=0.6. So 60% of the data is used for training, and the remaining 40% is used for testing and validation. 
+```{r}
+
+# Data Slicing
+inTrain<- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+mytraining<-training[inTrain, ]
+mytesting<-training[-inTrain, ]
+
+```
+Besides the outcome classe, there are 159 initial predictors in the dataset. A rough look at data enables one to find that most of the columns are uniformly white space or have few unique values. To remove these near zero variance predictors, I do the following procedures to identify useful predictors. 
+```{r}
+
+# preprocessing
+DataNZV <- nearZeroVar(mytraining, saveMetrics=TRUE)
+DataNZV
+NZVvars <- names(mytraining) %in% c("new_window", "kurtosis_roll_belt", "kurtosis_picth_belt",
+                                      "kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt",
+                                      "max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "avg_roll_arm", "stddev_roll_arm",
+                                      "var_roll_arm", "avg_pitch_arm", "stddev_pitch_arm", "var_pitch_arm", "avg_yaw_arm",
+                                      "stddev_yaw_arm", "var_yaw_arm", "kurtosis_roll_arm", "kurtosis_picth_arm",
+                                      "kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm",
+                                      "max_roll_arm", "min_roll_arm", "min_pitch_arm", "amplitude_roll_arm", "amplitude_pitch_arm",
+                                      "kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell",
+                                      "skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell",
+                                      "amplitude_yaw_dumbbell", "kurtosis_roll_forearm", "kurtosis_picth_forearm", "kurtosis_yaw_forearm",
+                                      "skewness_roll_forearm", "skewness_pitch_forearm", "skewness_yaw_forearm", "max_roll_forearm",
+                                      "max_yaw_forearm", "min_roll_forearm", "min_yaw_forearm", "amplitude_roll_forearm",
+                                      "amplitude_yaw_forearm", "avg_roll_forearm", "stddev_roll_forearm", "var_roll_forearm",
+                                      "avg_pitch_forearm", "stddev_pitch_forearm", "var_pitch_forearm", "avg_yaw_forearm",
+                                      "stddev_yaw_forearm", "var_yaw_forearm")
+mytraining <- mytraining[!NZVvars]
+mytraining <- mytraining[c(-1)]
+dim(mytraining)
+```
+Also, I delete the first column that labels the number of observations to avoid interference with the model-building. By doing this, I get 99 none zero predictors. 
+
+Too many NAs largely injure the columns' ability to act as good predictors. So next is to remove columns that have much too NAs. The threshold setting here is 60%, which means if there are over 60% elements in one column are NAs, I will disqualify the predictor and remove it from the dataset. 
+```{r}
+
+#remove colums that have more than 60% NA
+training1 <- mytraining
+for(i in 1:length(mytraining)) { 
+  if( sum( is.na( mytraining[, i] ) ) /nrow(mytraining) >= .6 ) { 
+    for(j in 1:length(training1)) {
+      if( length( grep(names(mytraining[i]), names(training1)[j]) ) ==1)  { 
+        training1 <- training1[ , -j] 
+      }   
+    } 
+  }
+}
+mytraining<-training1
+rm(training1)
+dim(mytraining)
+```
+When I have finished preprocessing with "mytraining" part in the training data, I do the same process with "mytesting" part in the training data and original testing data. It is simple if I copy the name of the predictors directly. Also, I would like to make the data type in "mytesting" and "testing" the same as that in "mytraining", so that there will be less error when I use the fitted model to do predition. 
+```{r}
+
+# for mytesting & testing
+clean1 <- colnames(mytraining)
+clean2 <- colnames(mytraining[,-58])
+mytesting <- mytesting[clean1]
+testing <- testing[clean2]
+
+# conversion to enforce the data type in testing is the same as that in mytraining
+for (i in 1:length(testing) ) {
+  for(j in 1:length(mytraining)) {
+    if( length( grep(names(mytraining[i]), names(testing)[j]) ) ==1)  {
+      class(testing[j]) <- class(mytraining[i])
+    }      
+  }      
+}
+testing <- rbind(mytraining[2, -58] , testing) 
+testing <- testing[-1,]
+
+```
+Here, I apply two algorithms to do the prediction, one is predicting with trees, and the other is random forests. Generally, random forest method is more accurate than decision tree, because the former involves boostrapping samples. And the fitted models tell the same story if investigating each model using confusionMatrix(). Both accuracy and Kappa values of the ramdon forest model are better than that of decision tree, showing great advantage of random forest. 
+```{r}
+
+# machine learning # trees
+modFit1 <- rpart(classe ~ ., data=mytraining, method="class")
+fancyRpartPlot(modFit1)
+
+predictmytesting1<-predict(modFit1, mytesting, type="class")
+confusionMatrix(predictmytesting1, mytesting$classe)
+
+# machine learning # random forest
+modFit2<-randomForest(classe~.,data=mytraining)
+predictmytesting2<-predict(modFit2, mytesting, type="class")
+confusionMatrix(predictmytesting2, mytesting$classe)
+
+```
+In this case, I use the second model to do prediction here. 
+```{r}
+
+# predicting
+predictesting <- predict(modFit2, testing, type = "class")
+predictesting
+
+```
+The above vector shown in predictesting is corresponding to the prediction from problem_id 1 to problem_id 20. 
+
+
+
+
